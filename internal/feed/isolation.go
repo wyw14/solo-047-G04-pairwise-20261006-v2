@@ -58,3 +58,29 @@ func (s *IsolationService) Release(circuit *Circuit, operationID string, at time
 	}
 	return circuit.update(StateReleased, operationID, at), nil
 }
+
+// MarkIsolated 是机器保护（如热停用跳闸）使用的隔离确认：它不需要人工
+// 隔离回执，直接把已进入 isolating 的回路推进到 isolated。
+func (s *IsolationService) MarkIsolated(circuit *Circuit, operationID string, at time.Time) (CircuitSnapshot, error) {
+	snapshot := circuit.Snapshot()
+	if snapshot.OperationID != operationID {
+		return snapshot, errors.New("isolation receipt scope does not match active operation")
+	}
+	if snapshot.State != StateIsolating {
+		return snapshot, errors.New("circuit is not awaiting isolation confirmation")
+	}
+	return circuit.update(StateIsolated, operationID, at), nil
+}
+
+// Reenergize 在隔离（未接地）状态下恢复送电，用于热安全条件解除后的自动复电。
+// 已接地回路必须走人工 Release 流程，本方法不会越过接地保护。
+func (s *IsolationService) Reenergize(circuit *Circuit, operationID string, at time.Time) (CircuitSnapshot, error) {
+	snapshot := circuit.Snapshot()
+	if snapshot.OperationID != operationID {
+		return snapshot, errors.New("re-energize operation does not match active isolation")
+	}
+	if snapshot.State != StateIsolated {
+		return snapshot, errors.New("only an isolated (ungrounded) circuit can be re-energized")
+	}
+	return circuit.update(StateEnergized, "", at), nil
+}

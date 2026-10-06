@@ -40,6 +40,8 @@ func NewServer(services *Services) *Server {
 		r.Get("/repeaters/{id}/telemetry", server.repeaterTelemetry)
 		r.Post("/repeaters/{id}/ramp", server.rampRepeater)
 		r.Post("/repeaters/{id}/reset", server.resetRepeater)
+		r.Get("/repeaters/{id}/thermal", server.getRepeaterThermal)
+		r.Post("/repeaters/{id}/thermal/refresh", server.refreshRepeaterThermal)
 		r.Get("/repeaters/{id}", server.getRepeater)
 		r.Post("/spans/{id}/alarms", server.admitAlarm)
 		r.Get("/spans/{id}/alarms", server.listAlarms)

@@ -43,11 +43,23 @@ func (s *Server) resetRepeater(writer http.ResponseWriter, request *http.Request
 		writeError(writer, http.StatusBadRequest, err)
 		return
 	}
-	if err := s.services.RepeaterHealth.Reset(chi.URLParam(request, "id"), input.Generation); err != nil {
+	repeaterID := chi.URLParam(request, "id")
+	target, err := s.services.Repeater(repeaterID)
+	if err != nil {
+		writeError(writer, http.StatusNotFound, err)
+		return
+	}
+	// 热安全锁存优先复位：它会联动复电并解决热事件。
+	if s.services.ThermalSafety != nil {
+		if err := s.services.ThermalSafety.Reset(repeaterID, input.Generation); err != nil {
+			writeError(writer, http.StatusConflict, err)
+			return
+		}
+	}
+	if err := s.services.RepeaterHealth.Reset(repeaterID, input.Generation); err != nil {
 		writeError(writer, http.StatusConflict, err)
 		return
 	}
-	target, _ := s.services.Repeater(chi.URLParam(request, "id"))
 	writeJSON(writer, http.StatusOK, target.Snapshot())
 }
 

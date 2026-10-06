@@ -12,14 +12,15 @@ import (
 )
 
 type SystemStatus struct {
-	GeneratedAt time.Time           `json:"generated_at"`
-	Spans       []span.Snapshot     `json:"spans"`
-	Routes      []route.Snapshot    `json:"routes"`
-	Repeaters   []repeater.Snapshot `json:"repeaters"`
-	Topologies  []topology.Snapshot `json:"topologies"`
-	EventCount  int                 `json:"event_count"`
-	Integrity   []IntegrityFinding  `json:"integrity"`
-	Warnings    []string            `json:"warnings"`
+	GeneratedAt time.Time                `json:"generated_at"`
+	Spans       []span.Snapshot          `json:"spans"`
+	Routes      []route.Snapshot         `json:"routes"`
+	Repeaters   []repeater.Snapshot      `json:"repeaters"`
+	Thermal     []repeater.ThermalStatus `json:"thermal"`
+	Topologies  []topology.Snapshot      `json:"topologies"`
+	EventCount  int                      `json:"event_count"`
+	Integrity   []IntegrityFinding       `json:"integrity"`
+	Warnings    []string                 `json:"warnings"`
 }
 
 type EventPage struct {
@@ -64,6 +65,9 @@ func (s *Services) Status() (SystemStatus, error) {
 	sort.Strings(repeaterIDs)
 	for _, id := range repeaterIDs {
 		result.Repeaters = append(result.Repeaters, s.Repeaters[id].Snapshot())
+		if s.ThermalSafety != nil {
+			result.Thermal = append(result.Thermal, s.ThermalSafety.Status(id))
+		}
 	}
 	records, err := s.Journal.Records()
 	if err != nil {

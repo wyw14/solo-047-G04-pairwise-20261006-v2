@@ -13,6 +13,7 @@ const (
 	KindOpticalPower Kind = "optical_power"
 	KindErrorRate    Kind = "error_rate"
 	KindCurrent      Kind = "current"
+	KindVoltage      Kind = "voltage"
 	KindTemperature  Kind = "temperature"
 	KindHeartbeat    Kind = "heartbeat"
 )

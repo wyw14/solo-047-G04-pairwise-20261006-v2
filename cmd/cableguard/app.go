@@ -61,17 +61,11 @@ func buildServices(cfg config) (*api.Services, error) {
 		return nil, err
 	}
 	healthProjector.Register(repeaterR07)
-	ingestor := telemetry.NewIngestor(telemetryRepository, now, healthProjector)
 
-	scanner := landing.NewScanner(topologies, 2*time.Millisecond)
-	otdrService := otdr.NewSessionService(topologies, scanner, ids, now)
-	drainer := route.NewDrainer(4 * time.Millisecond)
-	activator := route.NewActivator(topologies)
-	switchovers := switchover.NewSessionService(drainer, activator, ids, now, 25*time.Millisecond)
-	restorer := switchover.NewRestorer(drainer, activator, topologies, ids, now)
-
+	// 馈电隔离、回路与中继站电源守卫：热停用直接驱动这些回路隔离/复电。
 	receipts := landing.NewReceiptRegistry()
 	isolation := feed.NewIsolationService()
+	powerGuard := feed.NewRepeaterPowerGuard(isolation, ids)
 	permits := repair.NewPermitService(isolation, receipts, ids, now)
 	for _, circuitID := range []string{"A", "B"} {
 		circuit, createErr := feed.NewCircuit(circuitID, "east", now())
@@ -79,7 +73,31 @@ func buildServices(cfg config) (*api.Services, error) {
 			return nil, createErr
 		}
 		permits.RegisterCircuit(circuit)
+		powerGuard.RegisterCircuit(circuit)
 	}
+	// R07 由 east 站 A 回路供电。
+	if err := powerGuard.BindRepeater(feed.RepeaterCircuitBinding{
+		RepeaterID: "R07", StationID: "east", CircuitID: "A",
+	}); err != nil {
+		return nil, err
+	}
+
+	// 热安全模块：汇总温/流/压/代次，联动电源隔离与事件生命周期。
+	thermalEvents := api.NewThermalEventRecorder(journal)
+	thermalSafety, err := repeater.NewThermalSafetyMonitor(
+		repeater.DefaultThermalThresholds(), repeaterIncidents, powerGuard, thermalEvents, now)
+	if err != nil {
+		return nil, err
+	}
+	thermalSafety.Register(repeaterR07)
+	ingestor := telemetry.NewIngestor(telemetryRepository, now, healthProjector, thermalSafety)
+
+	scanner := landing.NewScanner(topologies, 2*time.Millisecond)
+	otdrService := otdr.NewSessionService(topologies, scanner, ids, now)
+	drainer := route.NewDrainer(4 * time.Millisecond)
+	activator := route.NewActivator(topologies)
+	switchovers := switchover.NewSessionService(drainer, activator, ids, now, 25*time.Millisecond)
+	restorer := switchover.NewRestorer(drainer, activator, topologies, ids, now)
 
 	acceptance := repair.NewAcceptanceService(restorer, now)
 	acceptance.Register("S3", spanS3, routeS3)
@@ -121,7 +139,7 @@ func buildServices(cfg config) (*api.Services, error) {
 		Acceptance: acceptance, Telemetry: ingestor, TelemetryRepository: telemetryRepository, Admission: admission,
 		Classifier: incident.NewClassifier(), Correlator: otdr.NewCorrelator(), Health: health, Station: station,
 		WetPlantTests: wetPlantTests, Ramps: ramps, Assets: assets,
-		RepeaterHealth: healthProjector, Actuator: actuator,
+		RepeaterHealth: healthProjector, ThermalSafety: thermalSafety, PowerGuard: powerGuard, Actuator: actuator,
 		Tests: make(map[string]*repair.TestSession), Incidents: make(map[string]*incident.Incident),
 	}, nil
 }
