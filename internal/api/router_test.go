@@ -56,6 +56,14 @@ func testServer(t *testing.T) *Server {
 	lifecycle := incident.NewRepeaterLifecycle()
 	projector := repeater.NewHealthProjector(lifecycle, 85)
 	projector.Register(repeaterAsset)
+	thermal, err := repeater.NewThermalSafety(repeater.ThermalThresholds{
+		DerateAtC: 70, SuspendAtC: 85, RecoverAtC: 60,
+		SampleMaxAge: 10 * time.Second, RecoverySamples: 2,
+	}, lifecycle, feed.NewIsolationService(), ids, clock.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	thermal.Register(repeaterAsset)
 	repository := telemetry.NewRepository()
 	acceptance := repair.NewAcceptanceService(switchover.NewRestorer(drainer, activator, registry, ids, clock.Now), clock.Now)
 	acceptance.Register("S3", target, path)
@@ -66,8 +74,8 @@ func testServer(t *testing.T) *Server {
 		OTDR:        otdr.NewSessionService(registry, landing.NewScanner(registry, 0), ids, clock.Now),
 		Switchovers: switchover.NewSessionService(drainer, activator, ids, clock.Now, time.Second),
 		Permits:     permitService, Receipts: receipts, Acceptance: acceptance,
-		Telemetry: telemetry.NewIngestor(repository, clock.Now, projector), TelemetryRepository: repository,
-		Admission: incident.NewAdmissionService(telemetry.NewMuteManager(clock.Now)),
+		Telemetry: telemetry.NewIngestor(repository, clock.Now, projector, thermal), TelemetryRepository: repository,
+		Admission: incident.NewAdmissionService(telemetry.NewMuteManager(clock.Now)), Thermal: thermal,
 	}
 	return NewServer(services)
 }
@@ -106,5 +114,53 @@ func TestHealthAndScanHTTPFlow(t *testing.T) {
 	server.Handler().ServeHTTP(status, httptest.NewRequest(http.MethodGet, "/api/system/status", nil))
 	if status.Code != http.StatusOK {
 		t.Fatalf("status code=%d body=%s", status.Code, status.Body.String())
+	}
+}
+
+func TestRepeaterThermalHTTPFlow(t *testing.T) {
+	server := testServer(t)
+	ingest := func(kind string, value float64, sequence uint64) {
+		t.Helper()
+		body, _ := json.Marshal(TelemetryRequest{Kind: kind, Value: value, Sequence: sequence, Generation: 1})
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/repeaters/R07/telemetry", bytes.NewReader(body)))
+		if response.Code != http.StatusAccepted {
+			t.Fatalf("ingest %s status=%d body=%s", kind, response.Code, response.Body.String())
+		}
+	}
+	assess := func() repeater.ThermalAssessment {
+		t.Helper()
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/repeaters/R07/thermal", nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("thermal status=%d body=%s", response.Code, response.Body.String())
+		}
+		var assessment repeater.ThermalAssessment
+		if err := json.Unmarshal(response.Body.Bytes(), &assessment); err != nil {
+			t.Fatal(err)
+		}
+		return assessment
+	}
+
+	if assessment := assess(); assessment.State != repeater.ThermalIndeterminate {
+		t.Fatalf("expected indeterminate before samples, got %+v", assessment)
+	}
+	ingest("temperature", 91, 1)
+	ingest("current", 1.4, 1)
+	ingest("voltage", 48, 1)
+	if assessment := assess(); assessment.State != repeater.ThermalSuspended {
+		t.Fatalf("expected suspended, got %+v", assessment)
+	}
+	ingest("temperature", 50, 2)
+	ingest("current", 1.1, 2)
+	ingest("voltage", 48, 2)
+	if assessment := assess(); assessment.State != repeater.ThermalSuspended {
+		t.Fatalf("single normal sample must not clear the fault, got %+v", assessment)
+	}
+	ingest("temperature", 50, 3)
+	ingest("current", 1.1, 3)
+	ingest("voltage", 48, 3)
+	if assessment := assess(); assessment.State != repeater.ThermalNormal {
+		t.Fatalf("expected recovery after consecutive normal samples, got %+v", assessment)
 	}
 }

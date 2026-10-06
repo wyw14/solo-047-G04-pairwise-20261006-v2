@@ -45,6 +45,7 @@ type Services struct {
 	Ramps               *repeater.RampController
 	Assets              *repair.Assets
 	RepeaterHealth      *repeater.HealthProjector
+	Thermal             *repeater.ThermalSafety
 	Actuator            *feed.Actuator
 	Tests               map[string]*repair.TestSession
 	Incidents           map[string]*incident.Incident

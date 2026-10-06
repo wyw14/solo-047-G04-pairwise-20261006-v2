@@ -61,7 +61,16 @@ func buildServices(cfg config) (*api.Services, error) {
 		return nil, err
 	}
 	healthProjector.Register(repeaterR07)
-	ingestor := telemetry.NewIngestor(telemetryRepository, now, healthProjector)
+	isolation := feed.NewIsolationService()
+	thermalSafety, err := repeater.NewThermalSafety(repeater.ThermalThresholds{
+		DerateAtC: 70, SuspendAtC: 85, RecoverAtC: 60,
+		SampleMaxAge: 10 * time.Second, RecoverySamples: 2,
+	}, repeaterIncidents, isolation, ids, now)
+	if err != nil {
+		return nil, err
+	}
+	thermalSafety.Register(repeaterR07)
+	ingestor := telemetry.NewIngestor(telemetryRepository, now, healthProjector, thermalSafety)
 
 	scanner := landing.NewScanner(topologies, 2*time.Millisecond)
 	otdrService := otdr.NewSessionService(topologies, scanner, ids, now)
@@ -71,7 +80,6 @@ func buildServices(cfg config) (*api.Services, error) {
 	restorer := switchover.NewRestorer(drainer, activator, topologies, ids, now)
 
 	receipts := landing.NewReceiptRegistry()
-	isolation := feed.NewIsolationService()
 	permits := repair.NewPermitService(isolation, receipts, ids, now)
 	for _, circuitID := range []string{"A", "B"} {
 		circuit, createErr := feed.NewCircuit(circuitID, "east", now())
@@ -79,6 +87,9 @@ func buildServices(cfg config) (*api.Services, error) {
 			return nil, createErr
 		}
 		permits.RegisterCircuit(circuit)
+		if circuitID == "A" {
+			thermalSafety.RegisterCircuit("R07", circuit)
+		}
 	}
 
 	acceptance := repair.NewAcceptanceService(restorer, now)
@@ -121,7 +132,7 @@ func buildServices(cfg config) (*api.Services, error) {
 		Acceptance: acceptance, Telemetry: ingestor, TelemetryRepository: telemetryRepository, Admission: admission,
 		Classifier: incident.NewClassifier(), Correlator: otdr.NewCorrelator(), Health: health, Station: station,
 		WetPlantTests: wetPlantTests, Ramps: ramps, Assets: assets,
-		RepeaterHealth: healthProjector, Actuator: actuator,
+		RepeaterHealth: healthProjector, Actuator: actuator, Thermal: thermalSafety,
 		Tests: make(map[string]*repair.TestSession), Incidents: make(map[string]*incident.Incident),
 	}, nil
 }

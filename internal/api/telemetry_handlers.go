@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -41,4 +42,22 @@ func (s *Server) getRepeater(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 	writeJSON(writer, http.StatusOK, target.Snapshot())
+}
+
+func (s *Server) getRepeaterThermal(writer http.ResponseWriter, request *http.Request) {
+	repeaterID := chi.URLParam(request, "id")
+	if _, err := s.services.Repeater(repeaterID); err != nil {
+		writeError(writer, http.StatusNotFound, err)
+		return
+	}
+	if s.services.Thermal == nil {
+		writeError(writer, http.StatusServiceUnavailable, errors.New("thermal safety is not configured"))
+		return
+	}
+	assessment, err := s.services.Thermal.Assess(repeaterID)
+	if err != nil {
+		writeError(writer, http.StatusNotFound, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, assessment)
 }
